@@ -15,7 +15,7 @@ import MapView, { Marker, Callout } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { getApiBaseUrl } from '../config/api.js';
+import { getDummyParks } from '../data/dummyParks.js';
 
 /* ───────── RENK PALETİ ───────── */
 const GREEN = '#1B4332';
@@ -225,10 +225,10 @@ export default function MapParksScreen({ route, navigation }) {
   // Alt kart animasyonu
   const cardAnim = useRef(new Animated.Value(0)).current;
 
+
+
   /* ── Veri Yükleme ─── */
   useEffect(() => {
-    if (!city || !district) return;
-
     const initialize = async () => {
       try {
         setLoading(true);
@@ -237,67 +237,47 @@ export default function MapParksScreen({ route, navigation }) {
         setParkCount(0);
         setSelectedId(null);
 
+        // İlçe geocode (opsiyonel, hata olursa devam eder)
         let districtRegion = null;
-        try {
-          const query = `${district}, ${city}, Türkiye`;
-          const geocoded = await Location.geocodeAsync(query);
-          if (geocoded && geocoded.length > 0) {
-            districtRegion = {
-              latitude: geocoded[0].latitude,
-              longitude: geocoded[0].longitude,
-              latitudeDelta: 0.08,
-              longitudeDelta: 0.08,
-            };
-            setDistrictCenter(districtRegion);
+        if (city && district) {
+          try {
+            const query = `${district}, ${city}, Türkiye`;
+            const geocoded = await Location.geocodeAsync(query);
+            if (geocoded && geocoded.length > 0) {
+              districtRegion = {
+                latitude: geocoded[0].latitude,
+                longitude: geocoded[0].longitude,
+                latitudeDelta: 0.08,
+                longitudeDelta: 0.08,
+              };
+              setDistrictCenter(districtRegion);
+            }
+          } catch (e) {
+            console.log('İlçe geocode hata:', e);
           }
-        } catch (e) {
-          console.log('İlçe geocode hata:', e);
         }
 
+        // Kullanıcı konumu al
         const { status } = await Location.requestForegroundPermissionsAsync();
         let uLoc = null;
         if (status === 'granted') {
-          const location = await Location.getCurrentPositionAsync({});
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
           uLoc = {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
           };
           setUserLocation(uLoc);
+          console.log('Kullanıcı konumu:', uLoc.latitude, uLoc.longitude);
         } else {
           setUserLocation(null);
         }
 
-        const url = `${getApiBaseUrl()}/api/parks?city=${encodeURIComponent(city)}&district=${encodeURIComponent(district)}`;
-        const response = await fetch(url);
-        const rawText = await response.text();
-        let data = {};
-        try {
-          data = rawText ? JSON.parse(rawText) : {};
-        } catch {
-          data = {};
-        }
-
-        // 404 + success:true (boş liste) gibi durumlarda response.ok false olsa da gövde başarılıdır.
-        if (data.success === true) {
-          setLoadError(null);
-        } else {
-          setParks([]);
-          setParkCount(0);
-          setLoadError(
-            data.message ||
-              (!response.ok
-                ? `Sunucu yanıtı: ${response.status}`
-                : 'Park listesi alınamadı.')
-          );
-          return;
-        }
-
-        const rawList = Array.isArray(data.parks) ? data.parks : [];
+        // Dummy verileri kullan
+        const rawList = getDummyParks(city, district);
         const normalized = rawList.map(normalizePark).filter((p) => p.lat != null && p.lon != null);
-
-        const count =
-          typeof data.count === 'number' ? data.count : normalized.length;
-        setParkCount(count);
+        setParkCount(normalized.length);
 
         const withDist = normalized.map((p) => {
           if (
@@ -349,7 +329,7 @@ export default function MapParksScreen({ route, navigation }) {
         }
       } catch (error) {
         console.log('MapParks hata:', error);
-        setLoadError('Bağlantı hatası. API adresini kontrol edin.');
+        setLoadError('Bir hata oluştu. Lütfen tekrar deneyin.');
         setParks([]);
         setParkCount(0);
       } finally {

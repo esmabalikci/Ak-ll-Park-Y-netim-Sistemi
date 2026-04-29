@@ -8,8 +8,26 @@ import {
   TouchableOpacity,
   Image,
   ActivityIndicator,
+  Linking,
+  Alert,
 } from 'react-native';
-import { getApiBaseUrl } from '../config/api.js';
+import * as Location from 'expo-location';
+import { getDummyParks } from '../data/dummyParks.js';
+
+// Haversine formülü ile iki koordinat arası mesafe (km)
+const getDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return (R * c).toFixed(1);
+};
 
 export default function ParksScreen({ navigation, route }) {
   const { city, district } = route.params || {};
@@ -17,85 +35,142 @@ export default function ParksScreen({ navigation, route }) {
   const [parks, setParks] = useState([]);
   const [filteredParks, setFilteredParks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userLocation, setUserLocation] = useState(null);
 
-  const fetchParks = async () => {
-    try {
-      setLoading(true);
-
-      const response = await fetch(
-        `${getApiBaseUrl()}/api/parks?city=${encodeURIComponent(city)}&district=${encodeURIComponent(district)}`
-      );
-
-      const data = await response.json().catch(() => ({}));
-
-      if (data.success === true) {
-        const list = Array.isArray(data.parks) ? data.parks : [];
-        setParks(list);
-        setFilteredParks(list);
-      } else {
-        setParks([]);
-        setFilteredParks([]);
+  // Kullanıcı konumunu al
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('İzin Gerekli', 'Konum izni verilmedi. Mesafe bilgisi gösterilemiyor.');
+        } else {
+          const location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          setUserLocation({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          });
+          console.log('Kullanıcı konumu:', location.coords.latitude, location.coords.longitude);
+        }
+      } catch (error) {
+        console.error('Konum alınamadı:', error);
       }
-    } catch (error) {
-      console.error('Park fetch error:', error);
-      setParks([]);
-      setFilteredParks([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    })();
+  }, []);
 
   useEffect(() => {
-    fetchParks();
+    // Şehir/ilçeye göre dummy veriyi yükle
+    const timer = setTimeout(() => {
+      const data = getDummyParks(city, district).map((p) => ({
+        ...p,
+        latitude: p.lat,
+        longitude: p.lon,
+      }));
+      setParks(data);
+      setFilteredParks(data);
+      setLoading(false);
+    }, 500);
+
+    return () => clearTimeout(timer);
   }, [city, district]);
 
   useEffect(() => {
     const text = searchText.toLowerCase();
-
-    const filtered = parks.filter((park) => {
-      return (
-        park.name.toLowerCase().includes(text) ||
-        park.location.toLowerCase().includes(text)
-      );
-    });
-
+    const filtered = parks.filter((park) =>
+      park.name.toLowerCase().includes(text)
+    );
     setFilteredParks(filtered);
   }, [searchText, parks]);
+
+  // Boş slot durumuna göre renk belirleme
+  const getSlotColor = (emptySlots) => {
+    if (emptySlots === 0) return '#ef4444';
+    if (emptySlots <= 10) return '#f59e0b';
+    return '#10b981';
+  };
+
+  const getSlotLabel = (emptySlots) => {
+    if (emptySlots === 0) return 'Dolu';
+    if (emptySlots <= 10) return 'Az Yer';
+    return 'Müsait';
+  };
 
   const renderParkCard = ({ item }) => (
     <TouchableOpacity
       style={styles.card}
-      activeOpacity={0.9}
-      onPress={() => navigation.navigate('ParkDetail', { park: item })}
+      activeOpacity={0.85}
+      onPress={() => {
+        console.log('Tıklanan Park ID:', item.id);
+        // navigation.navigate('ParkDetail', { park: item });
+      }}
     >
-      <Image source={{ uri: item.image }} style={styles.image} />
+      {/* Üst renk bandı - doluluk durumuna göre */}
+      <View style={[styles.cardTopBand, { backgroundColor: getSlotColor(item.emptySlots) }]} />
 
       <View style={styles.cardBody}>
-        <Text style={styles.parkName}>{item.name}</Text>
-        <Text style={styles.location}>📍 {item.location}</Text>
-        <Text style={styles.info}>Tür: {item.type}</Text>
-        <Text style={styles.info}>
-          Kapasite: {item.capacity ? item.capacity : 'Bilinmiyor'}
-        </Text>
-        <Text style={styles.info}>Doluluk: %{item.occupancyRate}</Text>
-
-        <View style={[styles.statusBadge, styles.available]}>
-          <Text style={styles.statusText}>{item.status}</Text>
+        {/* Park adı ve ikonu */}
+        <View style={styles.cardHeader}>
+          <View style={styles.iconCircle}>
+            <Text style={styles.iconText}>🅿️</Text>
+          </View>
+          <View style={styles.cardTitleArea}>
+            <Text style={styles.parkName}>{item.name}</Text>
+            <View style={styles.parkSubRow}>
+              <Text style={styles.parkId}>ID: {item.id}</Text>
+              {userLocation && (
+                <Text style={styles.distanceText}>
+                  📍 {getDistance(userLocation.latitude, userLocation.longitude, item.latitude, item.longitude)} km
+                </Text>
+              )}
+            </View>
+          </View>
         </View>
 
+        {/* Boş slot bilgisi */}
+        <View style={styles.slotRow}>
+          <View style={styles.slotInfo}>
+            <Text style={styles.slotNumber}>{item.emptySlots}</Text>
+            <Text style={styles.slotLabel}>Boş Yer</Text>
+          </View>
+
+          <View style={[styles.statusBadge, { backgroundColor: getSlotColor(item.emptySlots) + '20' }]}>
+            <View style={[styles.statusDot, { backgroundColor: getSlotColor(item.emptySlots) }]} />
+            <Text style={[styles.statusText, { color: getSlotColor(item.emptySlots) }]}>
+              {getSlotLabel(item.emptySlots)}
+            </Text>
+          </View>
+        </View>
+
+        {/* Buton satırı */}
         <View style={styles.buttonRow}>
           <TouchableOpacity
-            style={styles.detailButton}
-            onPress={() => navigation.navigate('ParkDetail', { park: item })}
+            style={[
+              styles.detailButton,
+              item.emptySlots === 0 && styles.detailButtonDisabled,
+            ]}
+            onPress={() => {
+              console.log('Detay - Park ID:', item.id);
+            }}
+            disabled={item.emptySlots === 0}
           >
-            <Text style={styles.buttonText}>Detayı Gör</Text>
+            <Text style={styles.buttonText}>
+              {item.emptySlots === 0 ? 'Park Dolu' : 'Detayı Gör →'}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.reserveButton}
-            onPress={() => navigation.navigate('ParkDetail', { park: item })}
+            style={styles.directionsButton}
+            onPress={() => {
+              const origin = userLocation
+                ? `&origin=${userLocation.latitude},${userLocation.longitude}`
+                : '';
+              const url = `https://www.google.com/maps/dir/?api=1${origin}&destination=${item.latitude},${item.longitude}`;
+              Linking.openURL(url);
+            }}
           >
-            <Text style={styles.buttonText}>Rezervasyon</Text>
+            <Text style={styles.directionsButtonText}>📍 Yol Tarifi</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -106,20 +181,22 @@ export default function ParksScreen({ navigation, route }) {
     return (
       <View style={styles.loaderContainer}>
         <ActivityIndicator size="large" color="#0f5c69" />
-        <Text style={{ marginTop: 12 }}>Parklar yükleniyor...</Text>
+        <Text style={{ marginTop: 12, color: '#555' }}>Parklar yükleniyor...</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>
-        {city} / {district} Parkları
+      <Text style={styles.header}>🚗 Parkları Keşfet</Text>
+      <Text style={styles.subHeader}>
+        Toplam {parks.length} park • {parks.reduce((a, p) => a + p.emptySlots, 0)} boş yer
       </Text>
 
       <TextInput
         style={styles.searchInput}
-        placeholder="Park adı veya konuma göre ara..."
+        placeholder="Park adına göre ara..."
+        placeholderTextColor="#999"
         value={searchText}
         onChangeText={setSearchText}
       />
@@ -131,7 +208,7 @@ export default function ParksScreen({ navigation, route }) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 20 }}
         ListEmptyComponent={
-          <Text style={styles.emptyText}>Bu ilçe için park bulunamadı.</Text>
+          <Text style={styles.emptyText}>Aramanızla eşleşen park bulunamadı.</Text>
         }
       />
     </View>
@@ -141,98 +218,170 @@ export default function ParksScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#dff1f4',
+    backgroundColor: '#f0f7f8',
     paddingHorizontal: 16,
-    paddingTop: 20,
+    paddingTop: 16,
   },
   loaderContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#f0f7f8',
   },
   header: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: 'bold',
     color: '#0f5c69',
-    marginBottom: 16,
     textAlign: 'center',
+    marginBottom: 4,
+  },
+  subHeader: {
+    fontSize: 14,
+    color: '#6b9aa2',
+    textAlign: 'center',
+    marginBottom: 16,
   },
   searchInput: {
     backgroundColor: '#fff',
     borderRadius: 14,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 12,
     marginBottom: 16,
     fontSize: 15,
     elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   card: {
     backgroundColor: '#fff',
-    borderRadius: 18,
-    marginBottom: 18,
+    borderRadius: 16,
+    marginBottom: 14,
     overflow: 'hidden',
-    elevation: 4,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
   },
-  image: {
+  cardTopBand: {
+    height: 4,
     width: '100%',
-    height: 180,
   },
   cardBody: {
-    padding: 14,
+    padding: 16,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#e8f4f6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  iconText: {
+    fontSize: 20,
+  },
+  cardTitleArea: {
+    flex: 1,
   },
   parkName: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#124d57',
-    marginBottom: 6,
   },
-  location: {
-    fontSize: 14,
-    color: '#456b72',
-    marginBottom: 6,
+  parkId: {
+    fontSize: 12,
+    color: '#8eadb4',
+    marginTop: 2,
   },
-  info: {
-    fontSize: 14,
-    color: '#333',
-    marginBottom: 4,
+  parkSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+    gap: 8,
+  },
+  distanceText: {
+    fontSize: 12,
+    color: '#3b82f6',
+    fontWeight: '600',
+  },
+  slotRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+    backgroundColor: '#f8fbfb',
+    borderRadius: 12,
+    padding: 12,
+  },
+  slotInfo: {
+    alignItems: 'center',
+  },
+  slotNumber: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#0f5c69',
+  },
+  slotLabel: {
+    fontSize: 12,
+    color: '#6b9aa2',
+    marginTop: 2,
   },
   statusBadge: {
-    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
-    marginTop: 8,
-    marginBottom: 12,
   },
-  available: {
-    backgroundColor: '#c8f7c5',
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
   },
   statusText: {
     fontWeight: '600',
-    color: '#124d57',
+    fontSize: 13,
   },
   buttonRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     gap: 10,
   },
   detailButton: {
     flex: 1,
-    backgroundColor: '#3b82f6',
-    paddingVertical: 12,
+    backgroundColor: '#0f5c69',
+    paddingVertical: 13,
     borderRadius: 12,
     alignItems: 'center',
   },
-  reserveButton: {
+  detailButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  directionsButton: {
     flex: 1,
-    backgroundColor: '#10b981',
-    paddingVertical: 12,
+    backgroundColor: '#3b82f6',
+    paddingVertical: 13,
     borderRadius: 12,
     alignItems: 'center',
   },
   buttonText: {
     color: '#fff',
     fontWeight: 'bold',
+    fontSize: 15,
+  },
+  directionsButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 15,
   },
   emptyText: {
     textAlign: 'center',
